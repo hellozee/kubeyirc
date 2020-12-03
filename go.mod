@@ -3,6 +3,7 @@ module github.com/hellozee/kubeyirc
 go 1.15
 
 require (
+	github.com/prometheus/client_golang v0.9.3
 	github.com/spf13/viper v1.7.1
 	github.com/thoj/go-ircevent v0.0.0-20190807115034-8e7ce4b5a1eb
 	k8s.io/api v0.0.0-20201114085527-4a626d306b98
