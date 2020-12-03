@@ -1,19 +1,57 @@
 package main
 
 import (
-	"fmt"
+	"strings"
+	"time"
 
 	"github.com/spf13/viper"
 	irc "github.com/thoj/go-ircevent"
+	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/client-go/tools/cache"
 )
 
+const server = "irc.freenode.net:6667"
+
 type IRCCLient struct {
-	connection *irc.Connection
+	conn       *irc.Connection
 	channel    string
+	controller cache.Controller
+	store      cache.Store
 }
 
 func (i *IRCCLient) SendMessage(msg string) {
-	i.connection.Privmsg(i.channel, msg)
+	i.conn.Privmsg(i.channel, msg)
+}
+
+func (i *IRCCLient) Start() {
+	joinedIn := make(chan struct{})
+	i.conn.AddCallback("366", func(e *irc.Event) {
+		i.conn.Privmsg(i.channel, "Joined in.\n")
+		joinedIn <- struct{}{}
+	})
+
+	i.setupCallBacks()
+
+	i.conn.Loop()
+	<-joinedIn
+
+	stop := make(chan struct{})
+	i.controller.Run(stop)
+}
+
+func (i *IRCCLient) setupCallBacks() {
+	i.conn.AddCallback("PRIVMSG", func(e *irc.Event) {
+		if strings.HasPrefix(i.channel, "#") {
+			if e.Message() == "#get pods" {
+				pods := i.store.List()
+				for _, pod := range pods {
+					p := pod.(*v1.Pod)
+					i.SendMessage(p.Name)
+				}
+			}
+		}
+	})
 }
 
 func NewIRCClient() IRCCLient {
@@ -22,8 +60,7 @@ func NewIRCClient() IRCCLient {
 	err := viper.ReadInConfig()
 
 	if err != nil {
-		fmt.Println(err)
-		return IRCCLient{}
+		panic(err)
 	}
 
 	viper.SetDefault("nick", "kubeyirc")
@@ -40,24 +77,31 @@ func NewIRCClient() IRCCLient {
 
 	conn.AddCallback("001", func(e *irc.Event) { conn.Join(channel) })
 
-	joinedIn := make(chan struct{})
-	conn.AddCallback("366", func(e *irc.Event) {
-		conn.Privmsg(channel, "Joined in.\n")
-		joinedIn <- struct{}{}
-	})
 	err = conn.Connect(server)
 
 	if err != nil {
-		fmt.Println(err)
 		conn.Quit()
-		return IRCCLient{}
+		panic(err)
+	}
+	alertFunc := func(logString string) func(obj interface{}) {
+		return func(obj interface{}) {
+			pod := obj.(*v1.Pod)
+			conn.Privmsg(channel, logString+pod.Name)
+		}
 	}
 
-	conn.Loop()
-	<-joinedIn
+	cs := NewKubeClient()
+
+	watcher := cache.NewListWatchFromClient(cs.CoreV1().RESTClient(), "pods", "", fields.Everything())
+	store, controller := cache.NewInformer(watcher, &v1.Pod{}, time.Second*3, cache.ResourceEventHandlerFuncs{
+		AddFunc:    alertFunc("Pod Added: "),
+		DeleteFunc: alertFunc("Pod Deleted: "),
+	})
 
 	return IRCCLient{
-		connection: conn,
+		conn:       conn,
 		channel:    channel,
+		controller: controller,
+		store:      store,
 	}
 }
