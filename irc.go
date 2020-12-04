@@ -1,13 +1,16 @@
 package main
 
 import (
+	"context"
 	"strings"
 	"time"
 
 	"github.com/spf13/viper"
 	irc "github.com/thoj/go-ircevent"
 	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 )
 
@@ -17,7 +20,7 @@ type IRCCLient struct {
 	conn       *irc.Connection
 	channel    string
 	controller cache.Controller
-	store      cache.Store
+	client     *kubernetes.Clientset
 }
 
 func (i *IRCCLient) SendMessage(msg string) {
@@ -42,12 +45,25 @@ func (i *IRCCLient) Start() {
 
 func (i *IRCCLient) setupCallBacks() {
 	i.conn.AddCallback("PRIVMSG", func(e *irc.Event) {
-		if strings.HasPrefix(i.channel, "#") {
+		if strings.HasPrefix(e.Arguments[0], "#") {
+
 			if e.Message() == "#get pods" {
-				pods := i.store.List()
-				for _, pod := range pods {
-					p := pod.(*v1.Pod)
+				pods, err := i.client.CoreV1().Pods("").List(context.Background(), metav1.ListOptions{})
+				if err != nil {
+					panic(err)
+				}
+				for _, p := range pods.Items {
 					i.SendMessage(p.Name)
+				}
+			}
+
+			if e.Message() == "#get deployments" {
+				deployments, err := i.client.AppsV1().Deployments("").List(context.Background(), metav1.ListOptions{})
+				if err != nil {
+					panic(err)
+				}
+				for _, d := range deployments.Items {
+					i.SendMessage(d.Name)
 				}
 			}
 		}
@@ -83,6 +99,7 @@ func NewIRCClient() IRCCLient {
 		conn.Quit()
 		panic(err)
 	}
+
 	alertFunc := func(logString string) func(obj interface{}) {
 		return func(obj interface{}) {
 			pod := obj.(*v1.Pod)
@@ -93,7 +110,7 @@ func NewIRCClient() IRCCLient {
 	cs := NewKubeClient()
 
 	watcher := cache.NewListWatchFromClient(cs.CoreV1().RESTClient(), "pods", "", fields.Everything())
-	store, controller := cache.NewInformer(watcher, &v1.Pod{}, time.Second*3, cache.ResourceEventHandlerFuncs{
+	_, controller := cache.NewInformer(watcher, &v1.Pod{}, time.Second*3, cache.ResourceEventHandlerFuncs{
 		AddFunc:    alertFunc("Pod Added: "),
 		DeleteFunc: alertFunc("Pod Deleted: "),
 	})
@@ -102,6 +119,6 @@ func NewIRCClient() IRCCLient {
 		conn:       conn,
 		channel:    channel,
 		controller: controller,
-		store:      store,
+		client:     cs,
 	}
 }
