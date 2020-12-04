@@ -66,6 +66,26 @@ func (i *IRCCLient) setupCallBacks() {
 					i.SendMessage(d.Name)
 				}
 			}
+
+			if e.Message() == "#get nodes" {
+				nodes, err := i.client.CoreV1().Nodes().List(context.Background(), metav1.ListOptions{})
+				if err != nil {
+					panic(err)
+				}
+				for _, n := range nodes.Items {
+					i.SendMessage(n.Name)
+				}
+			}
+
+			if e.Message() == "#get services" {
+				services, err := i.client.CoreV1().Services("").List(context.Background(), metav1.ListOptions{})
+				if err != nil {
+					panic(err)
+				}
+				for _, s := range services.Items {
+					i.SendMessage(s.Name)
+				}
+			}
 		}
 	})
 }
